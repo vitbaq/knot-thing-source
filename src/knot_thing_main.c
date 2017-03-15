@@ -23,10 +23,10 @@
 
 const char KNOT_THING_EMPTY_ITEM[] PROGMEM = { "EMPTY ITEM" };
 
-static uint8_t last_id; /* Last registered id */
-static uint8_t evt_sensor_id;
+static uint8_t pos_count;
 
 static struct _data_items{
+	uint8_t			id;		// KNOT_ID
 	// schema values
 	uint8_t			value_type;	// KNOT_VALUE_TYPE_* (int, float, bool, raw)
 	uint8_t			unit;		// KNOT_UNIT_*
@@ -48,15 +48,33 @@ static struct _data_items{
 	knot_data_functions	functions;
 } data_items[KNOT_THING_DATA_MAX];
 
+static struct _data_items* id2data_items(uint8_t id)
+{
+	/*
+	 * Sensor ID value 0 can't be used, 0 is defined as a null value to
+	 * verification.
+	 * Return if exists.
+	 */
+	if (!id)
+		return NULL;
+
+	for (uint8_t pos_id = 0; pos_id < KNOT_THING_DATA_MAX; pos_id++) {
+		if (data_items[pos_id].id == id)
+			return &data_items[pos_id];
+	}
+
+	return NULL;
+}
+
 static void reset_data_items(void)
 {
 	struct _data_items *pdata = data_items;
 	int8_t count;
 
-	last_id = 0;
-	evt_sensor_id = 0;
+	pos_count = 0;
 
 	for (count = 0; count < KNOT_THING_DATA_MAX; ++count, ++pdata) {
+		pdata->id 					= 0;
 		pdata->name					= (const char *)pgm_read_word(KNOT_THING_EMPTY_ITEM);
 		pdata->type_id					= KNOT_TYPE_ID_INVALID;
 		pdata->unit					= KNOT_UNIT_NOT_APPLICABLE;
@@ -95,11 +113,6 @@ static int data_function_is_valid(knot_data_functions *func)
 	return 0;
 }
 
-static uint8_t item_is_unregistered(uint8_t id)
-{
-	return (!(data_items[id].config.event_flags & KNOT_EVT_FLAG_UNREGISTERED));
-}
-
 void knot_thing_exit(void)
 {
 
@@ -109,6 +122,10 @@ int8_t knot_thing_register_raw_data_item(uint8_t id, const char *name,
 	uint8_t *raw_buffer, uint8_t raw_buffer_len, uint16_t type_id,
 	uint8_t value_type, uint8_t unit, knot_data_functions *func)
 {
+	struct _data_items *item = NULL;
+
+	item = id2data_items(id);
+
 	if (raw_buffer == NULL)
 		return -1;
 
@@ -119,7 +136,7 @@ int8_t knot_thing_register_raw_data_item(uint8_t id, const char *name,
 		unit, func) != 0)
 		return -1;
 
-	data_items[id].last_value_raw	= raw_buffer;
+	item->last_value_raw	= raw_buffer;
 
 	return 0;
 }
@@ -129,38 +146,44 @@ int8_t knot_thing_register_data_item(uint8_t id, const char *name,
 				uint16_t type_id, uint8_t value_type,
 				uint8_t unit, knot_data_functions *func)
 {
+	struct _data_items *item = NULL;
 
-	if (id >= KNOT_THING_DATA_MAX || (item_is_unregistered(id) != 0) ||
-		(knot_schema_is_valid(type_id, value_type, unit) != 0) ||
+	for (uint8_t i = 0; i < KNOT_THING_DATA_MAX; i++) {
+		if (!data_items[i].id) {
+			item = &data_items[i];
+			pos_count = i;
+			break;
+		}
+	}
+
+	if ((!item) || (knot_schema_is_valid(type_id, value_type, unit) != 0) ||
 		name == NULL || (data_function_is_valid(func) != 0))
 		return -1;
 
-	data_items[id].name					= name;
-	data_items[id].type_id					= type_id;
-	data_items[id].unit					= unit;
-	data_items[id].value_type				= value_type;
+	item->id 					= id;
+	item->name					= name;
+	item->type_id					= type_id;
+	item->unit					= unit;
+	item->value_type				= value_type;
 	// TODO: load flags and limits from persistent storage
 	/* Remove KNOT_EVT_FLAG_UNREGISTERED flag */
-	data_items[id].config.event_flags			= KNOT_EVT_FLAG_NONE;
+	item->config.event_flags			= KNOT_EVT_FLAG_NONE;
 	/* As "last_data" is a union, we need just to set the "biggest" member */
-	data_items[id].last_data.val_f.multiplier		= 1;
-	data_items[id].last_data.val_f.value_int			= 0;
-	data_items[id].last_data.val_f.value_dec			= 0;
+	item->last_data.val_f.multiplier		= 1;
+	item->last_data.val_f.value_int			= 0;
+	item->last_data.val_f.value_dec			= 0;
 	/* As "lower_limit" is a union, we need just to set the "biggest" member */
-	data_items[id].config.lower_limit.val_f.multiplier	= 1;
-	data_items[id].config.lower_limit.val_f.value_int	= 0;
-	data_items[id].config.lower_limit.val_f.value_dec	= 0;
+	item->config.lower_limit.val_f.multiplier	= 1;
+	item->config.lower_limit.val_f.value_int	= 0;
+	item->config.lower_limit.val_f.value_dec	= 0;
 	/* As "upper_limit" is a union, we need just to set the "biggest" member */
-	data_items[id].config.upper_limit.val_f.multiplier	= 1;
-	data_items[id].config.upper_limit.val_f.value_int	= 0;
-	data_items[id].config.upper_limit.val_f.value_dec	= 0;
-	data_items[id].last_value_raw				= NULL;
+	item->config.upper_limit.val_f.multiplier	= 1;
+	item->config.upper_limit.val_f.value_int	= 0;
+	item->config.upper_limit.val_f.value_dec	= 0;
+	item->last_value_raw				= NULL;
 	/* As "functions" is a union, we need just to set only one of its members */
-	data_items[id].functions.int_f.read			= func->int_f.read;
-	data_items[id].functions.int_f.write			= func->int_f.write;
-
-	if (id > last_id)
-		last_id = id;
+	item->functions.int_f.read			= func->int_f.read;
+	item->functions.int_f.write			= func->int_f.write;
 
 	return 0;
 }
@@ -169,12 +192,16 @@ int knot_thing_config_data_item(uint8_t id, uint8_t evflags, uint16_t time_sec,
 							knot_value_types *lower,
 							knot_value_types *upper)
 {
+	struct _data_items *item = NULL;
+
+	item = id2data_items(id);
+
 	/*FIXME: Check if config is valid */
-	if ((id >= KNOT_THING_DATA_MAX) || item_is_unregistered(id) == 0)
+	if (!item)
 		return -1;
 
-	data_items[id].config.event_flags = evflags;
-	data_items[id].config.time_sec = time_sec;
+	item->config.event_flags = evflags;
+	item->config.time_sec = time_sec;
 
 	/*
 	 * "lower/upper limit" is a union, we need
@@ -182,12 +209,10 @@ int knot_thing_config_data_item(uint8_t id, uint8_t evflags, uint16_t time_sec,
 	 */
 
 	if (lower)
-		memcpy(&(data_items[id].config.lower_limit), lower,
-							sizeof(*lower));
+		memcpy(&(item->config.lower_limit), lower, sizeof(*lower));
 
 	if (upper)
-		memcpy(&(data_items[id].config.upper_limit), upper,
-							sizeof(*upper));
+		memcpy(&(item->config.upper_limit), upper, sizeof(*upper));
 
 	// TODO: store flags and limits on persistent storage
 
@@ -198,19 +223,22 @@ int knot_thing_create_schema(uint8_t i, knot_msg_schema *msg)
 {
 	knot_msg_schema entry;
 
+	struct _data_items *item = NULL;
+
+	item = id2data_items(i);
+
 	memset(&entry, 0, sizeof(entry));
 
 	msg->hdr.type = KNOT_MSG_SCHEMA;
 
-	if ((i >= KNOT_THING_DATA_MAX) || item_is_unregistered(i) == 0)
+	if (!item)
 		return KNOT_INVALID_DEVICE;
 
 	msg->sensor_id = i;
-	entry.values.value_type = data_items[i].value_type;
-	entry.values.unit = data_items[i].unit;
-	entry.values.type_id = data_items[i].type_id;
-	strncpy(entry.values.name, data_items[i].name,
-						sizeof(entry.values.name));
+	entry.values.value_type = item->value_type;
+	entry.values.unit = item->unit;
+	entry.values.type_id = item->type_id;
+	strncpy(entry.values.name, item->name, sizeof(entry.values.name));
 
 	msg->hdr.payload_len = sizeof(entry.values) + sizeof(entry.sensor_id);
 
@@ -219,7 +247,8 @@ int knot_thing_create_schema(uint8_t i, knot_msg_schema *msg)
 	 * Every time a data item is registered we must update the max
 	 * number of sensor_id so we know when schema ends;
 	 */
-	if (i == last_id)
+
+	if (data_items[pos_count].id == i)
 		msg->hdr.type = KNOT_MSG_SCHEMA_END;
 
 	return KNOT_SUCCESS;
@@ -231,15 +260,19 @@ static int data_item_read(uint8_t id, knot_msg_data *data)
 	int32_t int32_val = 0, multiplier = 0;
 	uint32_t uint32_val = 0;
 
-	if ((id >= KNOT_THING_DATA_MAX) || item_is_unregistered(id) == 0)
+	struct _data_items *item = NULL;
+
+	item = id2data_items(id);
+
+	if (!item)
 		return -1;
 
-	switch (data_items[id].value_type) {
+	switch (item->value_type) {
 	case KNOT_VALUE_TYPE_RAW:
-		if (data_items[id].functions.raw_f.read == NULL)
+		if (item->functions.raw_f.read == NULL)
 			return -1;
 
-		if (data_items[id].functions.raw_f.read(uint8_buffer, &uint8_val) < 0)
+		if (item->functions.raw_f.read(uint8_buffer, &uint8_val) < 0)
 			return -1;
 
 		len = uint8_val;
@@ -247,10 +280,10 @@ static int data_item_read(uint8_t id, knot_msg_data *data)
 		data->hdr.payload_len = len + sizeof(data->sensor_id);
 		break;
 	case KNOT_VALUE_TYPE_BOOL:
-		if (data_items[id].functions.bool_f.read == NULL)
+		if (item->functions.bool_f.read == NULL)
 			return -1;
 
-		if (data_items[id].functions.bool_f.read(&uint8_val) < 0)
+		if (item->functions.bool_f.read(&uint8_val) < 0)
 			return -1;
 
 		len = sizeof(data->payload.values.val_b);
@@ -258,10 +291,10 @@ static int data_item_read(uint8_t id, knot_msg_data *data)
 		data->hdr.payload_len = len + sizeof(data->sensor_id);
 		break;
 	case KNOT_VALUE_TYPE_INT:
-		if (data_items[id].functions.int_f.read == NULL)
+		if (item->functions.int_f.read == NULL)
 			return -1;
 
-		if (data_items[id].functions.int_f.read(&int32_val, &multiplier) < 0)
+		if (item->functions.int_f.read(&int32_val, &multiplier) < 0)
 			return -1;
 
 		len = sizeof(data->payload.values.val_i);
@@ -270,10 +303,11 @@ static int data_item_read(uint8_t id, knot_msg_data *data)
 		data->hdr.payload_len = len + sizeof(data->sensor_id);
 		break;
 	case KNOT_VALUE_TYPE_FLOAT:
-		if (data_items[id].functions.float_f.read == NULL)
+		if (item->functions.float_f.read == NULL)
 			return -1;
 
-		if (data_items[id].functions.float_f.read(&int32_val, &uint32_val, &multiplier) < 0)
+		if (item->functions.float_f.read(&int32_val, &uint32_val,
+							&multiplier) < 0)
 			return -1;
 
 		len = sizeof(data->payload.values.val_f);
@@ -294,38 +328,41 @@ static int data_item_write(uint8_t id, knot_msg_data *data)
 	int8_t ret_val = -1;
 	uint8_t len;
 
-	if ((id >= KNOT_THING_DATA_MAX) || item_is_unregistered(id) == 0)
+	struct _data_items *item = NULL;
+
+	item = id2data_items(id);
+
+	if (!item)
 		return -1;
 
-	switch (data_items[id].value_type) {
+	switch (item->value_type) {
 	case KNOT_VALUE_TYPE_RAW:
 		len = sizeof(data->payload.raw);
-		if (data_items[id].functions.raw_f.write == NULL)
+		if (item->functions.raw_f.write == NULL)
 			goto done;
 
-		ret_val = data_items[id].functions.raw_f.write(
-						data->payload.raw, &len);
+		ret_val = item->functions.raw_f.write(data->payload.raw, &len);
 		break;
 	case KNOT_VALUE_TYPE_BOOL:
-		if (data_items[id].functions.bool_f.write == NULL)
+		if (item->functions.bool_f.write == NULL)
 			goto done;
 
-		ret_val = data_items[id].functions.bool_f.write(
+		ret_val = item->functions.bool_f.write(
 					&data->payload.values.val_b);
 		break;
 	case KNOT_VALUE_TYPE_INT:
-		if (data_items[id].functions.int_f.write == NULL)
+		if (item->functions.int_f.write == NULL)
 			goto done;
 
-		ret_val = data_items[id].functions.int_f.write(
+		ret_val = item->functions.int_f.write(
 					&data->payload.values.val_i.value,
 					&data->payload.values.val_i.multiplier);
 		break;
 	case KNOT_VALUE_TYPE_FLOAT:
-		if (data_items[id].functions.float_f.write == NULL)
+		if (item->functions.float_f.write == NULL)
 			goto done;
 
-		ret_val = data_items[id].functions.float_f.write(
+		ret_val = item->functions.float_f.write(
 					&data->payload.values.val_f.value_int,
 					&data->payload.values.val_f.value_dec,
 					&data->payload.values.val_f.multiplier);
@@ -356,20 +393,17 @@ static int verify_events(knot_msg_data *data)
 	 * changed according to the events registered.
 	 */
 
-	if (evt_sensor_id >= KNOT_THING_DATA_MAX) {
-		evt_sensor_id = 0;
-		return -1;
-	} else if (item_is_unregistered(evt_sensor_id) == 0) {
-		evt_sensor_id++;
+	if ((pos_count >= KNOT_THING_DATA_MAX) || (!data_items[pos_count].id)){
+		pos_count = 0;
 		return -1;
 	}
 
-	if (data_item_read(evt_sensor_id, data) < 0) {
-		evt_sensor_id++;
+	if (data_item_read(data_items[pos_count].id, data) < 0) {
+		pos_count++;
 		return -1;
 	}
 
-	pdata = &data_items[evt_sensor_id];
+	pdata = &data_items[pos_count];
 	last = &(pdata->last_data);
 
 	/* Value did not change or error: return -1, 0 means send data */
@@ -446,7 +480,7 @@ static int verify_events(knot_msg_data *data)
 		break;
 	default:
 		// This data item is not registered with a valid value type
-		evt_sensor_id++;
+		pos_count++;
 		return -1;
 	}
 
@@ -467,11 +501,8 @@ static int verify_events(knot_msg_data *data)
 	 * we reinitialize the counter, otherwise we just increment it.
 	 */
 	data->hdr.type = KNOT_MSG_DATA;
-	data->sensor_id = evt_sensor_id;
-	evt_sensor_id++;
-
-	if (evt_sensor_id > last_id)
-		evt_sensor_id = 0;
+	data->sensor_id = data_items[pos_count].id;
+	pos_count++;
 
 	// Nothing changed
 	if (comparison == 0)
