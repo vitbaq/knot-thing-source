@@ -347,35 +347,6 @@ static int clear_data(void)
 	return 0;
 }
 
-static int8_t mgmt_read(void)
-{
-	uint8_t buffer[MTU];
-	struct mgmt_nrf24_header *mhdr = (struct mgmt_nrf24_header *) buffer;
-	ssize_t rbytes;
-
-	rbytes = hal_comm_read(sock, buffer, sizeof(buffer));
-
-	/* mgmt on bad state? */
-	if (rbytes < 0 && rbytes != -EAGAIN)
-		return -1;
-
-	/* Nothing to read? */
-	if (rbytes == -EAGAIN)
-		return -1;
-
-	/* Return/ignore if it is not an event? */
-	if (!(mhdr->opcode & 0x0200))
-		return -1;
-
-	switch (mhdr->opcode) {
-
-	case MGMT_EVT_NRF24_DISCONNECTED:
-		return 0;
-	}
-
-	return -1;
-}
-
 static void read_online_messages(void) 
 {
 	if (hal_comm_read(cli_sock, &(msg.buffer), 
@@ -411,8 +382,7 @@ static void read_online_messages(void)
 
 int knot_thing_protocol_run(void)
 {
-	static uint8_t	run_state = STATE_DISCONNECTED;
-
+	static uint8_t run_state = STATE_DISCONNECTED;
 	struct nrf24_mac peer;
 	int8_t retval;
 
@@ -433,13 +403,8 @@ int knot_thing_protocol_run(void)
 		run_state = STATE_DISCONNECTED;
 	}
 
-	if (enable_run == 0) {
+	if (enable_run == 0)
 		return -1;
-	}
-
-	if (run_state != STATE_ERROR)
-		if (mgmt_read() == 0)
-			run_state = STATE_DISCONNECTED;
 
 	/* Network message handling state machine */
 	switch (run_state) {
@@ -448,9 +413,8 @@ int knot_thing_protocol_run(void)
 		led_status(BLINK_DISCONNECTED);
 		hal_comm_close(cli_sock);
 		hal_log_str("DISC");
-		if (hal_comm_listen(sock) < 0) {
+		if (hal_comm_listen(sock) < 0)
 			break;
-		}
 
 		run_state = STATE_ACCEPTING;
 		hal_log_str("ACCT");
