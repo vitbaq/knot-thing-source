@@ -57,9 +57,6 @@
 #define NAME_ERROR			50
 #define COMM_ERROR			100
 
-/* KNoT MTU */
-#define MTU 256
-
 #ifndef MIN
 #define MIN(a,b)			(((a) < (b)) ? (a) : (b))
 #endif
@@ -76,7 +73,6 @@ static int sock = -1;
 static int cli_sock = -1;
 static bool schema_flag = false;
 static uint8_t enable_run = 0, msg_sensor_id = 0;
-
 
 /*
  * FIXME: Thing address should be received via NFC
