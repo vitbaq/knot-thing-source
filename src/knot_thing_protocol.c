@@ -19,8 +19,9 @@
 #include <hal/avr_errno.h>
 #include <hal/avr_unistd.h>
 #include <hal/avr_log.h>
-#define CLEAR_EEPROM_PIN 7
-#define PIN_LED_STATUS   6 //LED used to show thing status
+#define CLEAR_EEPROM_PIN 	7
+#define PIN_LED_STATUS_RED   	6 //LED used to show thing status
+#define PIN_LED_USER_GREEN	2
 #endif
 
 #include <hal/storage.h>
@@ -52,6 +53,11 @@
 #define BLINK_DISCONNECTED		100
 #define BLINK_STABLISHING		2
 #define BLINK_ONLINE			1
+
+/* Leds mode */
+#define LED_ON		0
+#define LED_OFF		2
+#define LED_BLINK	1
 
 /* Periods for LED blinking in HALT conditions */
 #define NAME_ERROR			50
@@ -94,10 +100,11 @@ static void set_nrf24MAC(void)
 }
 static void halt_blinking_led(uint32_t period)
 {
+	led_status(PIN_LED_USER_GREEN, LED_OFF);
 	while(1) {
-		hal_gpio_digital_write(PIN_LED_STATUS, 0);
+		hal_gpio_digital_write(PIN_LED_STATUS_RED, 0);
 		hal_delay_ms(period);
-		hal_gpio_digital_write(PIN_LED_STATUS, 1);
+		hal_gpio_digital_write(PIN_LED_STATUS_RED, 1);
 		hal_delay_ms(period);
 	}
 }
@@ -127,10 +134,11 @@ static int init_connection()
 
 int knot_thing_protocol_init(const char *thing_name)
 {
-	hal_gpio_pin_mode(PIN_LED_STATUS, OUTPUT);
+	hal_gpio_pin_mode(PIN_LED_STATUS_RED, OUTPUT);
+	hal_gpio_pin_mode(PIN_LED_USER_GREEN, OUTPUT);
 	hal_gpio_pin_mode(CLEAR_EEPROM_PIN, INPUT_PULLUP);
 
-	if (thing_name == NULL) 
+	if (thing_name == NULL)
 		halt_blinking_led(NAME_ERROR);
 
 	device_name = (char *)thing_name;
@@ -160,39 +168,50 @@ void knot_thing_protocol_exit(void)
  * For each number n, the status LED should flash 2 * n
  * (once to light, another to turn off)
  */
-static void led_status(uint8_t status)
+static void led_status(uint8_t pin_led, uint8_t status)
 {
-	static uint32_t previous_status_time = 0;
-	static uint16_t status_interval;
-	static uint8_t nblink, led_state, previous_led_state = LOW;
+	static uint8_t led_red_state = 0;
+	static uint8_t led_green_state = 0;
+	static uint8_t previous_red_status = LED_OFF;
+	static uint8_t previous_green_status = LED_OFF;
+	static uint32_t previous_red_time = 0;
+	static uint32_t previous_green_time = 0;
 	uint32_t current_status_time = hal_time_ms();
 
-	/*
-	 * If the LED has lit and off twice the state,
-	 * a set a long interval
-	 */
-	if (nblink >= status * 2) {
-		nblink = 0;
-		status_interval = LONG_INTERVAL;
-		hal_gpio_digital_write(PIN_LED_STATUS, 0);
-	}
-
-	/*
-	 * Ensures that whenever the status changes,
-	 * the blink starts by turning on the LED
-	 **/
-	if (status != previous_led_state) {
-		previous_led_state = status;
-		led_state = LOW;
-	}
-
-	if ((current_status_time - previous_status_time) >= status_interval) {
-		previous_status_time = current_status_time;
-		led_state = !led_state;
-		hal_gpio_digital_write(PIN_LED_STATUS, led_state);
-
-		nblink++;
-		status_interval = SHORT_INTERVAL;
+	if (pin_led == PIN_LED_STATUS_RED) {
+		if (status != previous_red_status && status == LED_ON) {
+			hal_gpio_digital_write(pin_led, 1);
+			previous_red_status = LED_ON;
+		} else if (status != previous_red_status && status == LED_OFF) {
+			hal_gpio_digital_write(pin_led, 0);
+			previous_red_status = LED_OFF;
+		} else if (status == LED_BLINK) {
+			if ((current_status_time - previous_red_time) >= 250) {
+				previous_red_time = current_status_time;
+				led_red_state = !led_red_state;
+				hal_gpio_digital_write(PIN_LED_STATUS_RED,
+								led_red_state);
+			}
+			previous_red_status = LED_BLINK;
+		}
+	} else if (pin_led == PIN_LED_USER_GREEN) {
+		if (status != previous_green_status && status == LED_ON) {
+			hal_gpio_digital_write(pin_led, 1);
+			previous_green_status = LED_ON;
+		} else if
+			(status != previous_green_status && status == LED_OFF) {
+			hal_gpio_digital_write(pin_led, 0);
+			previous_green_status = LED_OFF;
+		} else if (status == LED_BLINK) {
+			if
+			((current_status_time - previous_green_time) >= 250) {
+				previous_green_time = current_status_time;
+				led_green_state = !led_green_state;
+				hal_gpio_digital_write(PIN_LED_USER_GREEN,
+							led_green_state);
+			}
+			previous_green_status = LED_BLINK;
+		}
 	}
 }
 
@@ -255,7 +274,7 @@ static int send_schema(void)
 	if (err < 0)
 		return err;
 
-	if (hal_comm_write(cli_sock, &(msg.buffer), 
+	if (hal_comm_write(cli_sock, &(msg.buffer),
 				sizeof(msg.hdr) + msg.hdr.payload_len) < 0)
 		/* TODO create a better error define in the protocol */
 		return KNOT_ERROR_UNKNOWN;
@@ -267,7 +286,7 @@ static int set_config(uint8_t sensor_id)
 {
 	int8_t err;
 
-	err = knot_thing_config_data_item(msg.config.sensor_id, 
+	err = knot_thing_config_data_item(msg.config.sensor_id,
 					msg.config.values.event_flags,
 					msg.config.values.time_sec,
 					&(msg.config.values.lower_limit),
@@ -279,7 +298,7 @@ static int set_config(uint8_t sensor_id)
 	msg.hdr.type = KNOT_MSG_CONFIG_RESP;
 	msg.hdr.payload_len = sizeof(msg.item.sensor_id);
 
-	if (hal_comm_write(cli_sock, &(msg.buffer), 
+	if (hal_comm_write(cli_sock, &(msg.buffer),
 				sizeof(msg.hdr) + msg.hdr.payload_len) < 0)
 		return -1;
 
@@ -301,7 +320,7 @@ static int set_data(uint8_t sensor_id)
 	if (err < 0)
 		msg.hdr.type = KNOT_ERROR_UNKNOWN;
 
-	if (hal_comm_write(cli_sock, &(msg.buffer), 
+	if (hal_comm_write(cli_sock, &(msg.buffer),
 				sizeof(msg.hdr) + msg.hdr.payload_len) < 0)
 		return -1;
 
@@ -322,7 +341,7 @@ static int get_data(uint8_t sensor_id)
 
 	msg.data.sensor_id = sensor_id;
 
-	if (hal_comm_write(cli_sock, &(msg.buffer), 
+	if (hal_comm_write(cli_sock, &(msg.buffer),
 				sizeof(msg.hdr) + msg.hdr.payload_len) < 0)
 		return -1;
 
@@ -380,9 +399,9 @@ static int8_t mgmt_read(void)
 	return -1;
 }
 
-static void read_online_messages(void) 
+static void read_online_messages(void)
 {
-	if (hal_comm_read(cli_sock, &(msg.buffer), 
+	if (hal_comm_read(cli_sock, &(msg.buffer),
 					KNOT_MSG_SIZE) > 0) {
 		/* There is a message to read */
 		switch (msg.hdr.type) {
@@ -431,7 +450,7 @@ int knot_thing_protocol_run(void)
 		hal_storage_reset_end();
 		set_nrf24MAC();
 
-		/* init connection */ 
+		/* init connection */
 		init_connection();
 
 		run_state = STATE_DISCONNECTED;
@@ -449,7 +468,8 @@ int knot_thing_protocol_run(void)
 	switch (run_state) {
 	case STATE_DISCONNECTED:
 		/* Internally listen starts broadcasting presence*/
-		led_status(BLINK_DISCONNECTED);
+		led_status(PIN_LED_USER_GREEN, LED_OFF);
+		led_status(PIN_LED_STATUS_RED, LED_OFF);
 		hal_comm_close(cli_sock);
 		hal_log_str("DISC");
 		if (hal_comm_listen(sock) < 0) {
@@ -465,7 +485,8 @@ int knot_thing_protocol_run(void)
 		 * Try to accept GW connection request. EAGAIN means keep
 		 * waiting, less then 0 means error and greater then 0 success
 		 */
-		led_status(BLINK_DISCONNECTED);
+		led_status(PIN_LED_USER_GREEN, LED_OFF);
+		led_status(PIN_LED_STATUS_RED, LED_OFF);
 		cli_sock = hal_comm_accept(sock, (void *) &peer);
 		if (cli_sock == -EAGAIN)
 			break;
@@ -482,7 +503,8 @@ int knot_thing_protocol_run(void)
 		 * If uuid/token were found, read the addresses and send
 		 * the auth request, otherwise register request
 		 */
-		led_status(BLINK_STABLISHING);
+		led_status(PIN_LED_USER_GREEN, LED_BLINK);
+		led_status(PIN_LED_STATUS_RED, LED_OFF);
 		hal_storage_read_end(HAL_STORAGE_ID_UUID, &(msg.auth.uuid),
 					KNOT_PROTOCOL_UUID_LEN);
 		hal_storage_read_end(HAL_STORAGE_ID_TOKEN, &(msg.auth.token),
@@ -492,10 +514,10 @@ int knot_thing_protocol_run(void)
 			run_state = STATE_AUTHENTICATING;
 			hal_log_str("AUTH");
 			msg.hdr.type = KNOT_MSG_AUTH_REQ;
-			msg.hdr.payload_len = KNOT_PROTOCOL_UUID_LEN + 
+			msg.hdr.payload_len = KNOT_PROTOCOL_UUID_LEN +
 						KNOT_PROTOCOL_TOKEN_LEN;
 
-			if (hal_comm_write(cli_sock, &(msg.buffer), 
+			if (hal_comm_write(cli_sock, &(msg.buffer),
 				sizeof(msg.hdr) + msg.hdr.payload_len) < 0)
 				run_state = STATE_ERROR;
 		} else {
@@ -513,7 +535,8 @@ int knot_thing_protocol_run(void)
 	 * nothing to read so we ignore it, less then 0 an error and 0 success
 	 */
 	case STATE_AUTHENTICATING:
-		led_status(BLINK_STABLISHING);
+		led_status(PIN_LED_USER_GREEN, LED_BLINK);
+		led_status(PIN_LED_STATUS_RED, LED_OFF);
 		retval = read_auth();
 		if (retval == KNOT_SUCCESS) {
 			run_state = STATE_ONLINE;
@@ -532,7 +555,8 @@ int knot_thing_protocol_run(void)
 		break;
 
 	case STATE_REGISTERING:
-		led_status(BLINK_STABLISHING);
+		led_status(PIN_LED_USER_GREEN, LED_BLINK);
+		led_status(PIN_LED_STATUS_RED, LED_OFF);
 		retval = read_register();
 		if (!retval)
 			run_state = STATE_SCHEMA;
@@ -550,7 +574,8 @@ int knot_thing_protocol_run(void)
 	 * error occurs, goes to STATE_ERROR.
 	 */
 	case STATE_SCHEMA:
-		led_status(BLINK_STABLISHING);
+		led_status(PIN_LED_USER_GREEN, LED_BLINK);
+		led_status(PIN_LED_STATUS_RED, LED_OFF);
 		hal_log_str("SCH");
 		retval = send_schema();
 		switch (retval) {
@@ -579,7 +604,8 @@ int knot_thing_protocol_run(void)
 	 * result was not KNOT_SUCCESS, goes to STATE_ERROR.
 	 */
 	case STATE_SCHEMA_RESP:
-		led_status(BLINK_STABLISHING);
+		led_status(PIN_LED_USER_GREEN, LED_BLINK);
+		led_status(PIN_LED_STATUS_RED, LED_OFF);
 		hal_log_str("SCH_R");
 		if (hal_comm_read(cli_sock, &(msg.buffer), KNOT_MSG_SIZE) > 0) {
 			if (msg.hdr.type != KNOT_MSG_SCHEMA_RESP &&
@@ -607,7 +633,8 @@ int knot_thing_protocol_run(void)
 		break;
 
 	case STATE_ONLINE:
-		led_status(BLINK_ONLINE);
+		led_status(PIN_LED_USER_GREEN, LED_ON);
+		led_status(PIN_LED_STATUS_RED, LED_OFF);
 		read_online_messages();
 		msg_sensor_id++;
 		get_data(msg_sensor_id);
@@ -620,7 +647,8 @@ int knot_thing_protocol_run(void)
 		break;
 
 	case STATE_RUNNING:
-		led_status(BLINK_ONLINE);
+		led_status(PIN_LED_USER_GREEN, LED_ON);
+		led_status(PIN_LED_STATUS_RED, LED_OFF);
 		read_online_messages();
 		/* If some event ocurred send msg_data */
 		if (knot_thing_verify_events(&(msg.data)) == 0) {
@@ -636,7 +664,8 @@ int knot_thing_protocol_run(void)
 		break;
 
 	case STATE_ERROR:
-		hal_gpio_digital_write(PIN_LED_STATUS, 1);
+		led_status(PIN_LED_USER_GREEN, LED_OFF);
+		led_status(PIN_LED_STATUS_RED, LED_ON);
 		hal_log_str("ERR");
 		run_state = STATE_DISCONNECTED;
 		hal_delay_ms(1000);
