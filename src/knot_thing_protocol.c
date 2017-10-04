@@ -14,16 +14,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#ifdef ARDUINO
-#include <Arduino.h>
-#include <hal/avr_errno.h>
-#include <hal/avr_unistd.h>
-#include <hal/avr_log.h>
-#define CLEAR_EEPROM_PIN 	7
-#define PIN_LED_STATUS_RED   	6 //LED used to show thing status
-#define PIN_LED_USER_GREEN	2
-#endif
-
 #include <hal/storage.h>
 #include <hal/nrf24.h>
 #include <hal/comm.h>
@@ -32,6 +22,24 @@
 #include "knot_thing_protocol.h"
 #include "knot_thing_main.h"
 #include "knot_thing_config.h"
+
+#ifdef ARDUINO
+#include <Arduino.h>
+#include <hal/avr_errno.h>
+#include <hal/avr_unistd.h>
+#include <hal/avr_log.h>
+#define CLEAR_EEPROM_PIN 	7
+
+#ifdef BOARD_SK_0101
+#define PIN_LED_STATUS_RED   	NULL
+#define PIN_LED_USER_GREEN	6
+#endif
+
+#ifdef BOARD_SK_0102
+#define PIN_LED_STATUS_RED   	6
+#define PIN_LED_USER_GREEN	2
+#endif
+#endif
 
 /* KNoT protocol client states */
 #define STATE_DISCONNECTED		0
@@ -98,6 +106,62 @@ static void set_nrf24MAC(void)
 	hal_storage_write_end(HAL_STORAGE_ID_MAC, &addr,
 						sizeof(struct nrf24_mac));
 }
+
+/*
+ * The function receives the number of times LED shall blink.
+ * For each number n, the status LED should flash 2 * n
+ * (once to light, another to turn off)
+ */
+static void led_status(uint8_t pin_led, uint8_t status)
+{
+	static uint8_t led_green_state = 0;
+	static uint8_t previous_green_status = LED_OFF;
+	static uint32_t previous_green_time = 0;
+	uint32_t current_status_time = hal_time_ms();
+#ifdef BOARD_SK_0102
+	static uint8_t led_red_state = 0;
+	static uint32_t previous_red_time = 0;
+	static uint8_t previous_red_status = LED_OFF;
+#endif
+	if (pin_led == PIN_LED_USER_GREEN) {
+		if (status != previous_green_status && status == LED_ON) {
+			hal_gpio_digital_write(pin_led, 1);
+			previous_green_status = LED_ON;
+		} else if
+		(status != previous_green_status && status == LED_OFF) {
+			hal_gpio_digital_write(pin_led, 0);
+			previous_green_status = LED_OFF;
+		} else if (status == LED_BLINK) {
+			if((current_status_time - previous_green_time) >= 250) {
+				previous_green_time = current_status_time;
+				led_green_state = !led_green_state;
+				hal_gpio_digital_write(PIN_LED_USER_GREEN,
+					led_green_state);
+				}
+				previous_green_status = LED_BLINK;
+			}
+	}
+#ifdef BOARD_SK_0102
+	else if (pin_led == PIN_LED_STATUS_RED) {
+		if (status != previous_red_status && status == LED_ON) {
+			hal_gpio_digital_write(pin_led, 1);
+			previous_red_status = LED_ON;
+		} else if (status != previous_red_status && status == LED_OFF) {
+			hal_gpio_digital_write(pin_led, 0);
+			previous_red_status = LED_OFF;
+		} else if (status == LED_BLINK) {
+			if ((current_status_time - previous_red_time) >= 250) {
+				previous_red_time = current_status_time;
+				led_red_state = !led_red_state;
+				hal_gpio_digital_write(PIN_LED_STATUS_RED,
+								led_red_state);
+			}
+			previous_red_status = LED_BLINK;
+		}
+	}
+#endif
+}
+
 static void halt_blinking_led(uint32_t period)
 {
 	led_status(PIN_LED_USER_GREEN, LED_OFF);
@@ -134,7 +198,9 @@ static int init_connection()
 
 int knot_thing_protocol_init(const char *thing_name)
 {
+#ifdef BOARD_SK_0102
 	hal_gpio_pin_mode(PIN_LED_STATUS_RED, OUTPUT);
+#endif
 	hal_gpio_pin_mode(PIN_LED_USER_GREEN, OUTPUT);
 	hal_gpio_pin_mode(CLEAR_EEPROM_PIN, INPUT_PULLUP);
 
@@ -161,58 +227,6 @@ void knot_thing_protocol_exit(void)
 	hal_comm_close(sock);
 	hal_comm_deinit();
 	enable_run = 0;
-}
-
-/*
- * The function receives the number of times LED shall blink.
- * For each number n, the status LED should flash 2 * n
- * (once to light, another to turn off)
- */
-static void led_status(uint8_t pin_led, uint8_t status)
-{
-	static uint8_t led_red_state = 0;
-	static uint8_t led_green_state = 0;
-	static uint8_t previous_red_status = LED_OFF;
-	static uint8_t previous_green_status = LED_OFF;
-	static uint32_t previous_red_time = 0;
-	static uint32_t previous_green_time = 0;
-	uint32_t current_status_time = hal_time_ms();
-
-	if (pin_led == PIN_LED_STATUS_RED) {
-		if (status != previous_red_status && status == LED_ON) {
-			hal_gpio_digital_write(pin_led, 1);
-			previous_red_status = LED_ON;
-		} else if (status != previous_red_status && status == LED_OFF) {
-			hal_gpio_digital_write(pin_led, 0);
-			previous_red_status = LED_OFF;
-		} else if (status == LED_BLINK) {
-			if ((current_status_time - previous_red_time) >= 250) {
-				previous_red_time = current_status_time;
-				led_red_state = !led_red_state;
-				hal_gpio_digital_write(PIN_LED_STATUS_RED,
-								led_red_state);
-			}
-			previous_red_status = LED_BLINK;
-		}
-	} else if (pin_led == PIN_LED_USER_GREEN) {
-		if (status != previous_green_status && status == LED_ON) {
-			hal_gpio_digital_write(pin_led, 1);
-			previous_green_status = LED_ON;
-		} else if
-			(status != previous_green_status && status == LED_OFF) {
-			hal_gpio_digital_write(pin_led, 0);
-			previous_green_status = LED_OFF;
-		} else if (status == LED_BLINK) {
-			if
-			((current_status_time - previous_green_time) >= 250) {
-				previous_green_time = current_status_time;
-				led_green_state = !led_green_state;
-				hal_gpio_digital_write(PIN_LED_USER_GREEN,
-							led_green_state);
-			}
-			previous_green_status = LED_BLINK;
-		}
-	}
 }
 
 static int send_register(void)
