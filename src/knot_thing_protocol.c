@@ -441,6 +441,8 @@ int knot_thing_protocol_run(void)
 			run_state = STATE_DISCONNECTED;
 	}
 
+	hal_comm_process();
+
 	/* Network message handling state machine */
 	switch (run_state) {
 	case STATE_DISCONNECTED:
